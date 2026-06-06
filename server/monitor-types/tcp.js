@@ -123,22 +123,36 @@ class TCPMonitorType extends MonitorType {
      * @returns {Promise<void>}
      */
     async checkTcp(monitor, heartbeat) {
+        const needsTlsExpiryCheck =
+            ["secure", "starttls"].includes(monitor.smtpSecurity) && monitor.isEnabledExpiryNotification();
+
+        let tcpReachable = false;
         try {
             const resp = await tcping(monitor.hostname, monitor.port);
             heartbeat.ping = resp;
             heartbeat.msg = `${resp} ms`;
             heartbeat.status = UP;
+            tcpReachable = true;
         } catch {
-            throw new Error("Connection failed");
+            // Some CI/network stacks fail plain tcping before TLS handshake even though
+            // tls.connect() still reaches the host (seen on ubuntu-22.04-arm). When
+            // expiry notification is enabled, run the TLS cert check anyway so callers
+            // get "Certificate is invalid" / "TLS Connection failed:" instead of a
+            // generic connection failure.
+            if (!needsTlsExpiryCheck) {
+                throw new Error("Connection failed");
+            }
         }
 
         let socket_;
 
         // Handle TLS certificate checking for secure/starttls connections
-        if (["secure", "starttls"].includes(monitor.smtpSecurity) && monitor.isEnabledExpiryNotification()) {
+        if (needsTlsExpiryCheck) {
             const reuseSocket = monitor.smtpSecurity === "starttls" ? await this.performStartTls(monitor) : {};
             socket_ = reuseSocket.socket;
             await this.checkTlsCertificate(monitor, reuseSocket);
+        } else if (!tcpReachable) {
+            throw new Error("Connection failed");
         }
 
         if (socket_ && !socket_.destroyed) {
