@@ -4,8 +4,9 @@ apicache.options({
     headerBlacklist: ["cache-control"],
     headers: {
         // Disable client side cache, only server side cache.
-        // BUG! Not working for the second request
-        "cache-control": "no-cache",
+        // no-store: Cloudflare must not edge-cache dynamic status APIs (no-cache was still cached).
+        "cache-control": "no-store, private, must-revalidate",
+        "cdn-cache-control": "no-store",
     },
 });
 

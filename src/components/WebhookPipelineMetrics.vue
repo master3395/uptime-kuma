@@ -25,7 +25,7 @@
             </div>
 
             <div class="col-md-6">
-                <div class="metric-card" :class="levelClass(metrics.queue.readyLevel)">
+                <div class="metric-card" :class="levelClass(queueCardLevel)">
                     <div class="metric-label">Message queue</div>
                     <div class="metric-value">
                         {{ formatNumber(metrics.queue.messagesReady) }}
@@ -35,6 +35,12 @@
                         Unacked: {{ formatNumber(metrics.queue.messagesUnacknowledged) }} · Total:
                         {{ formatNumber(metrics.queue.messageCount) }} · Consumers:
                         {{ formatNumber(metrics.queue.consumerCount) }}
+                    </div>
+                    <div
+                        v-if="metrics.queue.consumerCountLevel === 'warning' || metrics.queue.consumerCountLevel === 'critical'"
+                        class="metric-hint warning-text"
+                    >
+                        Consumer pool is below the healthy minimum (6+ expected under load).
                     </div>
                     <div v-if="!metrics.queue.connected" class="metric-hint warning-text">
                         Queue metrics are temporarily unavailable.
@@ -85,6 +91,7 @@ export default {
                     messagesUnacknowledged: null,
                     messageCount: null,
                     consumerCount: null,
+                    consumerCountLevel: "unknown",
                     readyLevel: "unknown",
                     connected: false,
                 },
@@ -105,6 +112,12 @@ export default {
                       ? [this.fetchError]
                       : [];
             return raw.filter((w) => typeof w === "string" && w.trim().length > 0);
+        },
+        queueCardLevel() {
+            const order = { ok: 0, unknown: 1, warning: 2, critical: 3 };
+            const ready = this.metrics.queue.readyLevel || "unknown";
+            const consumers = this.metrics.queue.consumerCountLevel || "unknown";
+            return order[consumers] > order[ready] ? consumers : ready;
         },
     },
 

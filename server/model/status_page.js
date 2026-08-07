@@ -180,6 +180,26 @@ class StatusPage extends BeanModel {
 
         $("title").text(statusPage.title);
         $("meta[name=description]").attr("content", description155);
+        $("body").prepend($("<h1>").addClass("sr-only").text(statusPage.title));
+
+        const seoNav = $('<nav aria-label="Related links" class="status-seo-nav"></nav>');
+        const seoNavLinks = [
+            { href: "/", label: "Status home" },
+            { href: "/status/newstargeted-status", label: "Overview" },
+            { href: "/status/discord-bot-network", label: "Discord bots" },
+            { href: "/status/webhook-services", label: "Webhook services" },
+            { href: "/status/api-services", label: "API services" },
+            { href: "/status/infrastructure", label: "Infrastructure" },
+        ];
+        for (const link of seoNavLinks) {
+            seoNav.append(
+                $("<a>")
+                    .attr("href", link.href)
+                    .attr("style", "margin-right:1rem;")
+                    .text(link.label)
+            );
+        }
+        $("body").prepend(seoNav);
 
         if (statusPage.icon) {
             $("link[rel=icon]").attr("href", statusPage.icon).removeAttr("type");
@@ -188,6 +208,13 @@ class StatusPage extends BeanModel {
         }
 
         const head = $("head");
+
+        // Hide SEO-only markup from sighted users (links stay in HTML for crawlers).
+        head.append(
+            $("<style>").text(
+                ".sr-only,.status-seo-nav{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important;}"
+            )
+        );
 
         if (analytics.isValidAnalyticsConfig(statusPage)) {
             let escapedAnalyticsScript = analytics.getAnalyticsScript(statusPage);
@@ -203,6 +230,34 @@ class StatusPage extends BeanModel {
 
         let ogType = $('<meta property="og:type" content="website" />');
         head.append(ogType);
+
+        const canonicalUrl = `https://status.newstargeted.com/status/${statusPage.slug}`;
+        head.append($('<link rel="canonical" />').attr("href", canonicalUrl));
+        head.append($('<meta property="og:url" />').attr("content", canonicalUrl));
+        head.append($('<meta property="og:site_name" content="News Targeted" />'));
+        head.append($('<meta property="og:image" />').attr("content", "https://newstargeted.com/hotlink-ok/logo.png"));
+        head.append($('<meta name="twitter:card" content="summary_large_image" />'));
+        head.append($('<meta name="twitter:image" />').attr("content", "https://newstargeted.com/hotlink-ok/logo.png"));
+
+        const jsonLd = {
+            "@context": "https://schema.org",
+            "@graph": [
+                {
+                    "@type": "WebSite",
+                    "name": statusPage.title,
+                    "url": canonicalUrl,
+                    "description": description155,
+                    "inLanguage": "en-US",
+                },
+                {
+                    "@type": "Organization",
+                    "name": "News Targeted",
+                    "url": "https://newstargeted.com/",
+                    "logo": "https://newstargeted.com/hotlink-ok/logo.png",
+                },
+            ],
+        };
+        head.append($('<script type="application/ld+json"></script>').text(JSON.stringify(jsonLd)));
 
         // Preload data
         // Add jsesc, fix https://github.com/louislam/uptime-kuma/issues/2186

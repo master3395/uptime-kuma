@@ -14,6 +14,19 @@ let router = express.Router();
 let cache = apicache.middleware;
 const server = UptimeKumaServer.getInstance();
 
+/**
+ * Prevent CDN/browser caching of live status polling data.
+ * @param {import("express").Response} response
+ * @returns {void}
+ */
+function setLiveStatusApiCacheHeaders(response) {
+    response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    response.setHeader("CDN-Cache-Control", "no-store");
+    response.setHeader("Surrogate-Control", "no-store");
+    response.setHeader("Pragma", "no-cache");
+    response.setHeader("Expires", "0");
+}
+
 router.get("/status/:slug", cache("5 minutes"), async (request, response) => {
     let slug = request.params.slug;
     slug = slug.toLowerCase();
@@ -78,9 +91,10 @@ router.get("/api/status-page/:slug", cache("5 minutes"), async (request, respons
 
 // Status Page Polling Data
 // Can fetch only if published
-router.get("/api/status-page/heartbeat/:slug", cache("1 minutes"), async (request, response) => {
+router.get("/api/status-page/heartbeat/:slug", async (request, response) => {
     allowStatusEmbedOrigin(request, response);
     allowDevAllOrigin(response);
+    setLiveStatusApiCacheHeaders(response);
 
     try {
         let heartbeatList = {};

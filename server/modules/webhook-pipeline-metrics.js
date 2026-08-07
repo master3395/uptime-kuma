@@ -46,6 +46,12 @@ function isWebhookPipelineConfigured() {
 const PUBLISHER_PROBE_TIMEOUT_MS = parseInt(process.env.WEBHOOK_PIPELINE_PUBLISHER_PROBE_MS || "1500", 10) || 1500;
 const RABBITMQ_FETCH_TIMEOUT_MS = parseInt(process.env.RABBITMQ_PIPELINE_MGMT_TIMEOUT_MS || "5000", 10) || 5000;
 
+/** Minimum healthy consumer count (orchestrator pool floor; alert below this only). */
+const CONSUMER_MIN_HEALTHY = parseInt(process.env.WEBHOOK_PIPELINE_CONSUMER_MIN || "6", 10) || 6;
+/** Queue ready warning/critical (matches ops runbook; autoscale may run 8-12 workers). */
+const QUEUE_READY_WARNING = parseInt(process.env.WEBHOOK_PIPELINE_READY_WARN || "500", 10) || 500;
+const QUEUE_READY_CRITICAL = parseInt(process.env.WEBHOOK_PIPELINE_READY_CRIT || "1000", 10) || 1000;
+
 let cache = { expiresAt: 0, value: null };
 const CACHE_TTL_MS = parseInt(process.env.WEBHOOK_PIPELINE_CACHE_MS || "5000", 10) || 5000;
 
@@ -132,10 +138,23 @@ function queueLevel(ready) {
     if (ready == null || !Number.isFinite(ready)) {
         return "unknown";
     }
-    if (ready >= 1000) {
+    if (ready >= QUEUE_READY_CRITICAL) {
         return "critical";
     }
-    if (ready >= 100) {
+    if (ready >= QUEUE_READY_WARNING) {
+        return "warning";
+    }
+    return "ok";
+}
+
+function consumerCountLevel(consumers) {
+    if (consumers == null || !Number.isFinite(consumers)) {
+        return "unknown";
+    }
+    if (consumers <= 0) {
+        return "critical";
+    }
+    if (consumers < CONSUMER_MIN_HEALTHY) {
         return "warning";
     }
     return "ok";
@@ -165,6 +184,7 @@ function buildQueuePayload(queueRaw) {
         messagesUnacknowledged,
         messageCount,
         consumerCount: queueRaw.consumerCount ?? queueRaw.consumers ?? 0,
+        consumerCountLevel: consumerCountLevel(queueRaw.consumerCount ?? queueRaw.consumers ?? 0),
         prefetchEffective: queueRaw.prefetchEffective ?? null,
         publisherChannelOpen: queueRaw.publisherChannelOpen ?? null,
         readyLevel: queueLevel(messagesReady),
@@ -367,6 +387,14 @@ async function fetchWebhookPipelineMetrics() {
     if (recvQLevelValue === "critical" || recvQLevelValue === "warning") {
         warnings.push("Large HTTP request backlog. New requests may wait or fail.");
     }
+    const consumerLevel = queue.consumerCountLevel || consumerCountLevel(queue.consumerCount);
+    if (consumerLevel === "critical") {
+        warnings.push("No RabbitMQ consumers: queued messages are not being delivered.");
+    } else if (consumerLevel === "warning") {
+        warnings.push(
+            `Low RabbitMQ consumer count (${queue.consumerCount}). Expected at least ${CONSUMER_MIN_HEALTHY} under load.`
+        );
+    }
 
     const proxy = {
         recvQ,
@@ -374,7 +402,10 @@ async function fetchWebhookPipelineMetrics() {
         establishedConnections,
         publisherHealthy: publisherProbe.publisherHealthy,
         healthy:
-            proxyLevel !== "critical" && queue.readyLevel !== "critical" && publisherProbe.publisherHealthy !== false,
+            proxyLevel !== "critical" &&
+            queue.readyLevel !== "critical" &&
+            consumerLevel !== "critical" &&
+            publisherProbe.publisherHealthy !== false,
     };
 
     const queuePublic = {
@@ -383,6 +414,7 @@ async function fetchWebhookPipelineMetrics() {
         messagesUnacknowledged: queue.messagesUnacknowledged,
         messageCount: queue.messageCount,
         consumerCount: queue.consumerCount,
+        consumerCountLevel: consumerLevel,
         readyLevel: queue.readyLevel,
     };
     if (!queue.connected && queue.error) {

@@ -10,8 +10,15 @@ const PUSH_RETRIES = Number(process.env.KUMA_PUSH_RETRIES) || 3;
 const PUSH_RETRY_DELAY_MS = Number(process.env.KUMA_PUSH_RETRY_DELAY_MS) || 2000;
 const FETCH_TIMEOUT_MS = Number(process.env.KUMA_PUSH_FETCH_TIMEOUT_MS) || 15000;
 const PUSH_CONCURRENCY = Number(process.env.KUMA_PUSH_CONCURRENCY) || 10;
+const DOWN_GRACE_TICKS = Number(process.env.KUMA_PUSH_DOWN_GRACE_TICKS) || 2;
 
 const DB_CONFIG_PATH = path.join(__dirname, "..", "data", "db-config.json");
+const REDIS_DESIRED_WORKERS_KEY = "webhook:desired_workers";
+const WEBHOOK_WORKER_NAME_RE = /^webhook-worker-(\d+)$/;
+const TRANSITIONAL_PM2_STATES = new Set(["launching", "stopping", "waiting restart", "restarting"]);
+
+/** Consecutive down observations per app before pushing status=down to Kuma. */
+const downStreakByApp = new Map();
 
 /**
  * Read Kuma's data/db-config.json from disk and return the parsed credentials.
@@ -89,6 +96,110 @@ function getPm2StateMap() {
     }
 
     return states;
+}
+
+/**
+ * Read webhook.newstargeted.com orchestrator target from Redis.
+ * When absent, scaled-out worker suppression is skipped (grace still applies).
+ * @returns {number|null} Desired worker count 1..N, or null if unavailable.
+ */
+function getDesiredWebhookWorkers() {
+    try {
+        const raw = runCommand(`redis-cli GET ${shellQuote(REDIS_DESIRED_WORKERS_KEY)}`).trim();
+        if (!raw || raw === "(nil)") {
+            return null;
+        }
+        const n = parseInt(raw, 10);
+        return Number.isFinite(n) && n >= 1 ? n : null;
+    } catch (_error) {
+        return null;
+    }
+}
+
+/**
+ * @param {string} appName PM2 process name.
+ * @returns {number|null} Worker slot index for webhook-worker-N, else null.
+ */
+function parseWebhookWorkerIndex(appName) {
+    const match = WEBHOOK_WORKER_NAME_RE.exec(appName);
+    if (!match) {
+        return null;
+    }
+    const index = parseInt(match[1], 10);
+    return Number.isFinite(index) ? index : null;
+}
+
+/**
+ * Decide Kuma push payload for one PM2 monitor.
+ * Webhook workers above the orchestrator pool target report standby (up) when
+ * stopped so autoscale does not page Discord. Active pool slots get a grace
+ * period before down to absorb pm2 restart/launch gaps.
+ * @param {{ appName: string }} monitor Normalized push monitor row.
+ * @param {string} pm2State Status from getPm2StateMap().
+ * @param {number|null} desiredWorkers Orchestrator target from Redis.
+ * @returns {{ status: "up"|"down", message: string, ping: number }}
+ */
+function resolveMonitorPush(monitor, pm2State, desiredWorkers) {
+    const workerIndex = parseWebhookWorkerIndex(monitor.appName);
+
+    if (workerIndex != null && desiredWorkers != null && workerIndex > desiredWorkers) {
+        if (pm2State === "stopped" || pm2State === "missing") {
+            downStreakByApp.set(monitor.appName, 0);
+            return {
+                status: "up",
+                message: `PM2 ${monitor.appName} standby (scaled out, pool=${desiredWorkers})`,
+                ping: 50,
+            };
+        }
+    }
+
+    if (TRANSITIONAL_PM2_STATES.has(pm2State)) {
+        downStreakByApp.set(monitor.appName, 0);
+        return {
+            status: "up",
+            message: `PM2 ${monitor.appName} ${pm2State}`,
+            ping: 50,
+        };
+    }
+
+    if (pm2State === "online") {
+        downStreakByApp.set(monitor.appName, 0);
+        return {
+            status: "up",
+            message: `PM2 ${monitor.appName} online`,
+            ping: 50,
+        };
+    }
+
+    if (workerIndex != null) {
+        const inActivePool = desiredWorkers == null || workerIndex <= desiredWorkers;
+        if (inActivePool && pm2State === "missing") {
+            downStreakByApp.set(monitor.appName, 0);
+            return {
+                status: "up",
+                message: `PM2 ${monitor.appName} starting (${pm2State})`,
+                ping: 50,
+            };
+        }
+
+        if (inActivePool && DOWN_GRACE_TICKS > 1) {
+            const streak = (downStreakByApp.get(monitor.appName) || 0) + 1;
+            downStreakByApp.set(monitor.appName, streak);
+            if (streak < DOWN_GRACE_TICKS) {
+                return {
+                    status: "up",
+                    message: `PM2 ${monitor.appName} grace (${streak}/${DOWN_GRACE_TICKS}): ${pm2State}`,
+                    ping: 50,
+                };
+            }
+        }
+    }
+
+    return {
+        status: "down",
+        message: `PM2 ${monitor.appName} ${pm2State}`,
+        ping: 0,
+    };
 }
 
 /**
@@ -265,16 +376,14 @@ async function syncOnce() {
     try {
         const pm2States = getPm2StateMap();
         const monitors = getPm2PushMonitors();
+        const desiredWorkers = getDesiredWebhookWorkers();
 
         await runWithConcurrency(monitors, PUSH_CONCURRENCY, async (monitor) => {
             const state = pm2States.get(monitor.appName) || "missing";
-            const isUp = state === "online";
-            const status = isUp ? "up" : "down";
-            const message = isUp ? `PM2 ${monitor.appName} online` : `PM2 ${monitor.appName} ${state}`;
-            const ping = isUp ? 50 : 0;
+            const push = resolveMonitorPush(monitor, state, desiredWorkers);
 
             try {
-                await sendPush(monitor.token, status, message, ping);
+                await sendPush(monitor.token, push.status, push.message, push.ping);
                 okCount += 1;
             } catch (error) {
                 failCount += 1;
@@ -319,7 +428,7 @@ async function syncOnce() {
  */
 async function main() {
     process.stdout.write(
-        `[pm2-kuma-push-sync] starting (loop=${LOOP_INTERVAL_MS}ms concurrency=${PUSH_CONCURRENCY} fetch_timeout=${FETCH_TIMEOUT_MS}ms)\n`
+        `[pm2-kuma-push-sync] starting (loop=${LOOP_INTERVAL_MS}ms concurrency=${PUSH_CONCURRENCY} fetch_timeout=${FETCH_TIMEOUT_MS}ms down_grace_ticks=${DOWN_GRACE_TICKS})\n`
     );
     await syncOnce();
     setInterval(() => {
