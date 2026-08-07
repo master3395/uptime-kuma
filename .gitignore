@@ -24,6 +24,7 @@ extra/exe-builder/obj
 
 .vs
 .vscode
+.devcontainer
 
 # Deploy-only (status.newstargeted.com); not submitted to upstream
 /ecosystem.config.js
