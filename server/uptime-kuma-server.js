@@ -130,6 +130,7 @@ class UptimeKumaServer {
         UptimeKumaServer.monitorTypeList["rabbitmq"] = new RabbitMqMonitorType();
         UptimeKumaServer.monitorTypeList["sip-options"] = new SIPMonitorType();
         UptimeKumaServer.monitorTypeList["gamedig"] = new GameDigMonitorType();
+        UptimeKumaServer.monitorTypeList["steam"] = new SteamMonitorType();
         UptimeKumaServer.monitorTypeList["port"] = new TCPMonitorType();
         UptimeKumaServer.monitorTypeList["manual"] = new ManualMonitorType();
         UptimeKumaServer.monitorTypeList["globalping"] = new GlobalpingMonitorType(this.getUserAgent());
@@ -139,6 +140,7 @@ class UptimeKumaServer {
         UptimeKumaServer.monitorTypeList["sqlserver"] = new MssqlMonitorType();
         UptimeKumaServer.monitorTypeList["mysql"] = new MysqlMonitorType();
         UptimeKumaServer.monitorTypeList["oracledb"] = new OracleDbMonitorType();
+        UptimeKumaServer.monitorTypeList["ntp"] = new NTPMonitorType();
 
         // Allow all CORS origins (polling) in development
         let cors = undefined;
@@ -638,6 +640,7 @@ const { MongodbMonitorType } = require("./monitor-types/mongodb");
 const { RabbitMqMonitorType } = require("./monitor-types/rabbitmq");
 const { SIPMonitorType } = require("./monitor-types/sip-options");
 const { GameDigMonitorType } = require("./monitor-types/gamedig");
+const { SteamMonitorType } = require("./monitor-types/steam");
 const { TCPMonitorType } = require("./monitor-types/tcp.js");
 const { ManualMonitorType } = require("./monitor-types/manual");
 const { GlobalpingMonitorType } = require("./monitor-types/globalping");
@@ -647,4 +650,5 @@ const { SystemServiceMonitorType } = require("./monitor-types/system-service");
 const { MssqlMonitorType } = require("./monitor-types/mssql");
 const { MysqlMonitorType } = require("./monitor-types/mysql");
 const { OracleDbMonitorType } = require("./monitor-types/oracledb");
+const { NTPMonitorType } = require("./monitor-types/ntp");
 const Monitor = require("./model/monitor");
